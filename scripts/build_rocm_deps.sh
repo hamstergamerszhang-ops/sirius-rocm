@@ -24,7 +24,7 @@
 #     -DCMAKE_PREFIX_PATH=/path/to/install
 # =============================================================================
 
-set -euo pipefail
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -131,16 +131,16 @@ clone_dep "jitify" "https://github.com/ROCm/jitify.git" "release/rocmds-26.03"
 clone_dep "hipcomp" "https://github.com/ROCm/hipcomp-core.git" "release/rocmds-26.03"
 clone_dep "spdlog" "https://github.com/gabime/spdlog.git" "v1.14.1"
 clone_dep "fmt" "https://github.com/fmtlib/fmt.git" "11.0.2"
-clone_dep "rapids-logger" "https://github.com/rapidsai/rapids-logger.git" "release/0.2.0"
-clone_dep "flatbuffers" "https://github.com/google/flatbuffers.git" "v24.3.25"
-clone_dep "roaring" "https://github.com/RoaringBitmap/CRoaring.git" "v4.3.11"
+clone_dep "rapids-logger" "https://github.com/rapidsai/rapids-logger.git" "release/0.2.0" || true
+clone_dep "flatbuffers" "https://github.com/google/flatbuffers.git" "v24.3.25" || true
+clone_dep "roaring" "https://github.com/RoaringBitmap/CRoaring.git" "v4.3.11" || true
 clone_dep "dlpack" "https://github.com/dmlc/dlpack.git" "v1.0"
-clone_dep "nanoarrow" "https://github.com/apache/arrow-nanoarrow.git" "apache-arrow-nanoarrow-0.6.0"
-clone_dep "thread-pool" "https://github.com/bshoshany/thread-pool.git" "v4.1.0"
-clone_dep "zstd" "https://github.com/facebook/zstd.git" "v1.5.6"
-clone_dep "kvikio" "https://github.com/ROCm/kvikio.git" "branch-25.10"
-clone_dep "nvtx" "https://github.com/NVIDIA/NVTX.git" "v3.2.0"
-clone_dep "arrow" "https://github.com/apache/arrow.git" "apache-arrow-18.0.0"
+clone_dep "nanoarrow" "https://github.com/apache/arrow-nanoarrow.git" "apache-arrow-nanoarrow-0.6.0" || true
+clone_dep "thread-pool" "https://github.com/bshoshany/thread-pool.git" "v4.1.0" || true
+clone_dep "zstd" "https://github.com/facebook/zstd.git" "v1.5.6" || true
+clone_dep "kvikio" "https://github.com/ROCm/kvikio.git" "branch-25.10" || true
+clone_dep "nvtx" "https://github.com/NVIDIA/NVTX.git" "v3.2.0" || true
+clone_dep "arrow" "https://github.com/apache/arrow.git" "apache-arrow-18.0.0" || true
 
 # Build FETCHCONTENT_SOURCE_DIR overrides for cmake — these tell CPM/FetchContent
 # to use the pre-cloned source dirs instead of fetching from GitHub.
@@ -153,6 +153,87 @@ for dir in "$DEPS_CACHE"/*-src; do
   FETCH_ARGS="$FETCH_ARGS -DFETCHCONTENT_SOURCE_DIR_${upper}=${dir}"
 done
 echo "  Pre-cloned deps: $(ls -d "$DEPS_CACHE"/*-src 2>/dev/null | wc -l)"
+echo ""
+
+# -----------------------------------------------------------------------------
+# Step 0.5: Patch cuco (hipCollections) API compatibility
+# -----------------------------------------------------------------------------
+# hipDF's release/rocmds-26.03 uses NVIDIA cuco APIs that don't exist in the
+# hipCollections fork: valid_extent, make_valid_extent, bucket_storage_ref
+# with specific template params, static_set_ref with 6 template params.
+# This patch adds the missing APIs to the hipCollections cuco headers so
+# hipDF compiles without modification.
+echo "=== Step 0.5: Patching cuco (hipCollections) API compatibility ==="
+
+# Find the cuco source dir (CPM downloads it with a hash suffix)
+CUCO_SRC=$(find "$DEPS_CACHE" -maxdepth 1 -type d -name "cuco*" -path "*/cuco*" 2>/dev/null | head -1)
+if [ -z "$CUCO_SRC" ]; then
+  CUCO_SRC=$(find "$DEPS_CACHE" -maxdepth 2 -type d -name "include" -path "*/cuco*" 2>/dev/null | head -1)
+  CUCO_SRC=$(dirname "$(dirname "$CUCO_SRC")")
+fi
+if [ -z "$CUCO_SRC" ] && [ -d "$DEPS_CACHE/cuco-src" ]; then
+  CUCO_SRC="$DEPS_CACHE/cuco-src"
+fi
+
+if [ -n "$CUCO_SRC" ] && [ -d "$CUCO_SRC/include/cuco" ]; then
+  CUCO_INC="$CUCO_SRC/include/cuco"
+  echo "  cuco include dir: $CUCO_INC"
+
+  # Patch 1: Add valid_extent + make_valid_extent to extent.cuh
+  EXTENT_FILE="$CUCO_INC/extent.cuh"
+  if [ -f "$EXTENT_FILE" ] && ! grep -q "valid_extent" "$EXTENT_FILE"; then
+    echo "  Patching extent.cuh: adding valid_extent + make_valid_extent"
+    # Insert before the final #include line
+    sed -i '/^#include <cuco\/detail\/extent\/extent.inl>/i\
+\
+// --- NVIDIA cuco API compatibility (used by hipDF) ---\
+template <typename SizeType, std::size_t Extent = dynamic_extent>\
+using valid_extent = extent<SizeType, Extent>;\
+\
+template <int32_t CGSize, int32_t BucketSize, typename SizeType, std::size_t N = dynamic_extent>\
+[[nodiscard]] auto constexpr make_valid_extent(extent<SizeType, N> const& ext) {\
+  return make_bucket_extent<CGSize, BucketSize, SizeType, N>(ext);\
+}\
+template <typename ProbingScheme, typename Storage, typename SizeType, std::size_t N = dynamic_extent>\
+[[nodiscard]] auto constexpr make_valid_extent(SizeType size) {\
+  return bucket_extent<SizeType, N>(size);\
+}' "$EXTENT_FILE"
+  else
+    echo "  extent.cuh: already patched (or valid_extent exists)"
+  fi
+
+  # Patch 2: Add <span> includes to hipDF files that use std::span without including it
+  HIPDF_SRC="$BUILD_DIR/hipDF/cpp"
+  for f in src/jit/row_ir.hpp src/jit/row_ir.cpp src/io/parquet/experimental/hybrid_scan.cpp \
+           include/cudf/io/experimental/hybrid_scan.hpp include/cudf/utilities/span.hpp \
+           include/cudf/detail/jit/span.cuh; do
+    full="$HIPDF_SRC/$f"
+    if [ -f "$full" ] && ! grep -q '#include.*<span>' "$full"; then
+      echo "  Patching $f: adding #include <span>"
+      sed -i '1i #include <span>' "$full"
+    fi
+  done
+
+  # Patch 3: Fix ZSTD_STATIC_LINKING_ONLY=0N typo (should be =0)
+  ZSTD_CMAKE="$HIPDF_SRC/cmake/thirdparty/get_zstd.cmake"
+  if [ -f "$ZSTD_CMAKE" ] && grep -q "ZSTD_STATIC_LINKING_ONLY=0N" "$ZSTD_CMAKE"; then
+    echo "  Patching get_zstd.cmake: fixing ZSTD_STATIC_LINKING_ONLY=0N → =0"
+    sed -i 's/ZSTD_STATIC_LINKING_ONLY=0N/ZSTD_STATIC_LINKING_ONLY=0/' "$ZSTD_CMAKE"
+  fi
+
+  # Patch 4: Fix CPM.cmake empty file issue
+  CPM_FILE="$DEPS_CACHE/cpm/CPM_0.40.0.cmake"
+  CPM_REAL="$DEPS_CACHE/cpm/CPM.cmake"
+  if [ -f "$CPM_REAL" ] && [ ! -s "$CPM_FILE" ]; then
+    echo "  Fixing CPM_0.40.0.cmake (was empty)"
+    cp "$CPM_REAL" "$CPM_FILE"
+    mkdir -p "$DEPS_CACHE/cmake"
+    cp "$CPM_FILE" "$DEPS_CACHE/cmake/"
+  fi
+else
+  echo "  WARNING: cuco source not found in deps cache — cuco API patch skipped"
+  echo "  hipDF build may fail with 'no template named valid_extent'"
+fi
 echo ""
 
 # =============================================================================
@@ -219,12 +300,14 @@ fi
 
 # Apply cuDF 26.06 API patches (fetch_footer_to_host, all_column_chunks_byte_ranges)
 # AND the get_rmm.cmake patch (use find_package instead of CPM re-fetch).
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Use the SCRIPT_DIR from the top of this file (set at line ~30), not a
+# re-computed one, because the working directory has changed during hipMM build.
 if [ -f "$SCRIPT_DIR/hipdf_26.06_api_patch.sh" ]; then
   bash "$SCRIPT_DIR/hipdf_26.06_api_patch.sh" "$HIPDF_DIR"
 else
-  echo "WARNING: hipdf_26.06_api_patch.sh not found — Sirius will fail to compile"
-  echo "  without fetch_footer_to_host and all_column_chunks_byte_ranges."
+  echo "WARNING: hipdf_26.06_api_patch.sh not found at $SCRIPT_DIR/"
+  echo "  Sirius will fail to compile without fetch_footer_to_host and"
+  echo "  all_column_chunks_byte_ranges."
 fi
 
 cd "$HIPDF_DIR"
