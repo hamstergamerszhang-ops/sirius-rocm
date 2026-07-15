@@ -4,7 +4,7 @@ Standalone **ROCm/HIP backend** for [Sirius](https://github.com/sirius-db/sirius
 
 ## What this is
 
-This repository provides everything needed to build and run Sirius on AMD ROCm/HIP hardware (MI300 / gfx942), without modifying the main Sirius codebase. It was spun out from [PR #1153](https://github.com/sirius-db/sirius/pull/1153) at the request of the upstream maintainer (Xiangyao Yu), who wants the ROCm backend developed separately to avoid burdening the main repo with dual CUDA/ROCm maintenance.
+Everything needed to build and run Sirius on AMD ROCm/HIP hardware (MI300 / gfx942), without touching the main Sirius codebase. Spun out from [PR #1153](https://github.com/sirius-db/sirius/pull/1153) at Xiangyao Yu's request — maintaining CUDA and ROCm side by side in one repo is a real ongoing cost, so the ROCm backend lives here instead.
 
 ### Architecture
 
@@ -86,12 +86,9 @@ export LD_LIBRARY_PATH=/opt/rocm/lib:${LD_LIBRARY_PATH:-}
 ./scripts/run_tpch_rocm.sh --scale-factor 1
 ```
 
-## Path to adoption
+## What's left
 
-1. **Complete hipDF build** on a stable AMD box (the 5 build fixes are applied — needs a box that doesn't get recycled mid-build)
-2. **Build Sirius end-to-end** with `ENABLE_ROCM=ON`
-3. **Run TPC-H** on real gfx942 hardware — demonstrate correctness + performance
-4. **Potential hosting under `sirius-db/sirius-rocm`** — the upstream maintainer is open to hosting once TPC-H benchmarks pass on real hardware
+Finish the hipDF build on a box that stays up long enough (the 5 fixes above are already applied — the blocker has been rented boxes dying mid-build, not the code). Then build Sirius end-to-end with `ENABLE_ROCM=ON` and run TPC-H for real correctness + performance numbers. Xiangyao's said he's open to hosting this under `sirius-db` once those numbers exist.
 
 ## License
 
