@@ -38,8 +38,13 @@ if(NOT DEFINED CMAKE_HIP_ARCHITECTURES)
     set(CMAKE_HIP_ARCHITECTURES "native" CACHE STRING "AMD GPU architecture (auto-detected)" FORCE)
     message(STATUS "CMAKE_HIP_ARCHITECTURES: auto-detected via rocminfo (native)")
   else()
-    set(CMAKE_HIP_ARCHITECTURES "gfx942" CACHE STRING "AMD GPU architecture" FORCE)
-    message(STATUS "CMAKE_HIP_ARCHITECTURES: no GPU detected, defaulting to gfx942")
+    # No GPU detected — build for all MI-series archs (multi-arch fatbinary).
+    # For consumer GPUs (gfx1100 etc.) or to speed up the build, pass
+    # -DCMAKE_HIP_ARCHITECTURES=gfx1100 explicitly.
+    set(CMAKE_HIP_ARCHITECTURES "gfx90a;gfx942;gfx950" CACHE STRING "AMD GPU architecture" FORCE)
+    message(WARNING "CMAKE_HIP_ARCHITECTURES: no AMD GPU detected. "
+                    "Building for all MI-series archs (gfx90a;gfx942;gfx950) — this is slower. "
+                    "For a specific arch, pass -DCMAKE_HIP_ARCHITECTURES=gfx1100 (or your arch).")
   endif()
 endif()
 
