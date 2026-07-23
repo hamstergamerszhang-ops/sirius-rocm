@@ -63,6 +63,19 @@ jobs:
             echo "WARNING: hipcc not found. Installing ROCm packages..."
             wget -qO - https://repo.radeon.com/rocm/rocm.gpg.key | sudo apt-key add -
             echo "deb [arch=amd64] https://repo.radeon.com/rocm/apt/6.2 noble main" | sudo tee /etc/apt/sources.list.d/rocm.list
+            # ubuntu-latest's own noble repos already ship generic hipcc/
+            # rocminfo/rocm-cmake packages (versioned e.g. 6.0.0-1) that
+            # satisfy other preinstalled packages' deps -- apt's default
+            # version-based resolver prefers those over the ROCm 6.2 repo's
+            # pinned versions (e.g. rocm-cmake 0.13.0.60200-66~24.04), so
+            # `apt-get install rocm-dev` fails with unmet dependencies
+            # ("Depends: rocm-cmake (= 0.13.0...) but 6.0.0-1 is to be
+            # installed") every time without this. Pin the radeon.com origin
+            # above Ubuntu's own repos so apt actually picks the versions
+            # rocm-dev/rocm-utils require, instead of what a plain version
+            # comparison would pick.
+            echo -e "Package: *\nPin: origin repo.radeon.com\nPin-Priority: 1001" | \
+              sudo tee /etc/apt/preferences.d/rocm-pin-600 > /dev/null
             sudo apt-get update
             sudo apt-get install -y rocm-dev rocm-utils hipblas-dev hipcub-dev rocthrust-dev
           else
