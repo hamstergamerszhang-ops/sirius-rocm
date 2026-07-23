@@ -14,6 +14,7 @@ name: ROCm Compile Test
 on:
   push:
     branches:
+      - main
       - feat/rocm-port
   pull_request:
     paths:
@@ -106,12 +107,31 @@ jobs:
           # Bloom filter test
           hipcc -o /tmp/test_bf /tmp/cuda2rocm/cuco-rocm/tests/test_bloom_filter.cu \
             -I /tmp/cuda2rocm/cuco-rocm/include -I cmake/rocm_compat --offload-arch=gfx942 2>&1
-          /tmp/test_bf
 
           # Static set test
           hipcc -o /tmp/test_ss /tmp/cuda2rocm/cuco-rocm/tests/test_static_set.cu \
             -I /tmp/cuda2rocm/cuco-rocm/include -I cmake/rocm_compat --offload-arch=gfx942 2>&1
-          /tmp/test_ss
+
+          # Actually RUNNING these binaries needs a real AMD GPU (/dev/kfd, the
+          # ROCm kernel driver device node) -- GitHub-hosted ubuntu-latest
+          # runners don't have one. Without this guard, fixing the push
+          # trigger above would have turned "never runs" into "always fails
+          # at the run step" on every push, which is worse than not running
+          # at all for a repo under external review. Compilation itself is
+          # still real, hardware-independent signal (cross-compiling HIP for
+          # --offload-arch=gfx942 doesn't need the device present) -- only
+          # the execution is gated. On a self-hosted ROCm runner (/dev/kfd
+          # present), both binaries actually run for full verification.
+          if [ -e /dev/kfd ]; then
+            echo "Real ROCm device detected -- running compiled tests"
+            /tmp/test_bf
+            /tmp/test_ss
+          else
+            echo "No /dev/kfd on this runner (expected on GitHub-hosted "
+            echo "ubuntu-latest) -- compile-only verification passed, "
+            echo "skipping execution. Register a self-hosted ROCm runner "
+            echo "for real runtime verification (see 'full-build' job below)."
+          fi
 
   full-build:
     name: Full Sirius build (needs self-hosted ROCm runner)
