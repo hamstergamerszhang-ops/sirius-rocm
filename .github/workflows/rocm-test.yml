@@ -85,11 +85,19 @@ jobs:
       - name: Fetch cuda2rocm shims
         if: steps.check.outputs.has_rocm == 'true'
         run: |
-          # Extract the FetchContent URL + hash from CMakeLists.txt
-          URL=$(grep -oP 'URL https://github.com/[^ ]+' CMakeLists.txt | head -1 | cut -d' ' -f2)
-          echo "Fetching: $URL"
+          # This used to grep a FetchContent URL out of CMakeLists.txt -- but
+          # that URL only ever existed in the sirius-db/sirius SUBMODULE's own
+          # CMakeLists.txt (after scripts/setup.sh's patch step), not this
+          # repo's top-level wrapper file (see its own comment: "The
+          # submodule's own CMakeLists.txt (after patching) contains the
+          # FetchContent for cuda2rocm"). This job's checkout doesn't fetch
+          # submodules (only the disabled full-build job does), so the grep
+          # always matched nothing and silently fed an empty URL to curl/tar.
+          # Fetch cuda2rocm's shims directly instead -- it's this org's own
+          # repo, no indirection needed.
           mkdir -p cmake/rocm_compat
-          curl -sL "$URL" | tar xz --strip-components=2 -C cmake/rocm_compat
+          git clone --depth 1 https://github.com/hamstergamerszhang-ops/cuda2rocm.git /tmp/cuda2rocm_shims
+          cp -r /tmp/cuda2rocm_shims/cuda-compat-shims/include/. cmake/rocm_compat/
           ls cmake/rocm_compat/
 
       - name: Compile shim test
