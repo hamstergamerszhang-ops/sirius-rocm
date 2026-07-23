@@ -85,9 +85,11 @@ echo "Using compiler: $HIPCC"
 # a mismatch is a fatal error ("mismatch between CMAKE_HIP_ARCH_ARCHITECTURES
 # and AMDGPU_TARGETS").
 # -----------------------------------------------------------------------------
-export ROCM_AMDGPU_TARGETS="gfx942"
-export GPU_TARGETS="gfx942"
-HIP_ARCH="gfx942"
+# -----------------------------------------------------------------------------
+# Auto-detect the GPU architecture instead of hardcoding gfx942.
+# -----------------------------------------------------------------------------
+source "$SCRIPT_DIR/detect_gpu_arch.sh"
+HIP_ARCH="$GPU_ARCH"
 
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"

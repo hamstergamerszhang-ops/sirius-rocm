@@ -26,9 +26,21 @@ set(SIRIUS_BUILD_S3_TESTS    OFF CACHE BOOL "S3 integration tests (needs Go)" FO
 set(SIRIUS_BUILD_TELEMETRY   OFF CACHE BOOL "Telemetry bridge (needs Rust)" FORCE)
 set(EXTENSION_STATIC_BUILD   ON  CACHE BOOL "Link sirius into duckdb binary" FORCE)
 
-# Default to gfx942 (MI300) — override with -DCMAKE_HIP_ARCHITECTURES=gfx90a etc.
+# Auto-detect GPU architecture via rocminfo (works on any AMD GPU).
+# Override with -DCMAKE_HIP_ARCHITECTURES=gfx90a etc. if needed.
 if(NOT DEFINED CMAKE_HIP_ARCHITECTURES)
-  set(CMAKE_HIP_ARCHITECTURES "gfx942" CACHE STRING "AMD GPU architecture" FORCE)
+  execute_process(
+    COMMAND rocminfo
+    OUTPUT_VARIABLE _rocminfo_output
+    ERROR_QUIET
+    RESULT_VARIABLE _rocminfo_result)
+  if(_rocminfo_result EQUAL 0 AND _rocminfo_output MATCHES "gfx[0-9]+[a-z]?[0-9]*")
+    set(CMAKE_HIP_ARCHITECTURES "native" CACHE STRING "AMD GPU architecture (auto-detected)" FORCE)
+    message(STATUS "CMAKE_HIP_ARCHITECTURES: auto-detected via rocminfo (native)")
+  else()
+    set(CMAKE_HIP_ARCHITECTURES "gfx942" CACHE STRING "AMD GPU architecture" FORCE)
+    message(STATUS "CMAKE_HIP_ARCHITECTURES: no GPU detected, defaulting to gfx942")
+  endif()
 endif()
 
 # Use hipcc as the compiler (wraps clang++ with HIP target flags).
